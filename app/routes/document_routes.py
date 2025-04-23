@@ -174,17 +174,25 @@ async def query_embeddings_by_file_id(
     try:
         embedding = get_cached_query_embedding(body.query)
 
+        # Define filter based on whether file_id is provided
+        if body.file_id:
+            # If file_id is provided, filter by file_id
+            search_filter = {"file_id": body.file_id}
+        else:
+            # If file_id is not provided, filter by user_id = "public" (general knowledge base)
+            search_filter = {"user_id": "public"}
+
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"file_id": body.file_id},
+                filter=search_filter,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": body.file_id}
+                embedding, k=body.k, filter=search_filter
             )
 
         if not documents:
@@ -358,10 +366,13 @@ async def embed_file(
     response_status = True
     response_message = "File processed successfully."
     known_type = None
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
+    if is_general_kb:
+        user_id = "public"
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        if not hasattr(request.state, "user"):
+            user_id = entity_id if entity_id else "public"
+        else:
+            user_id = entity_id if entity_id else request.state.user.get("id")
 
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
@@ -501,6 +512,7 @@ async def embed_file_upload(
     file_id: str = Form(...),
     uploaded_file: UploadFile = File(...),
     entity_id: str = Form(None),
+    is_general_kb: bool = Form(False),
 ):
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
@@ -519,7 +531,7 @@ async def embed_file_upload(
         )
 
     try:
-        loader, known_type = get_loader(
+        loader, known_type, file_ext = get_loader(
             uploaded_file.filename, uploaded_file.content_type, temp_file_path
         )
 
@@ -558,6 +570,7 @@ async def embed_file_upload(
         "file_id": file_id,
         "filename": uploaded_file.filename,
         "known_type": known_type,
+        "file_ext": file_ext,
     }
 
 
